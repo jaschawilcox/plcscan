@@ -273,40 +273,42 @@ def GetIdentity(ip, port, src_tsap, dst_tsap):
     res = []
 
     szl_dict = {
-        0x11:
-                { 'title': 'Module Identification',
-                  'indexes': {
-                      1:'Module',
-                      6:'Basic Hardware',
-                      7:'Basic Firmware'
-                  },
-                  'packer': {
-                      (1, 6): lambda(packet): "{0:s} v.{2:d}.{3:d}".format(*unpack('!20sHBBH', packet)),
-                      (7,): lambda(packet): "{0:s} v.{3:d}.{4:d}.{5:d}".format(*unpack('!20sHBBBB', packet))
-                  }
-                },
-        0x1c:
-                { 'title': 'Component Identification',
-                  'indexes': {
-                      1: 'Name of the PLC',
-                      2: 'Name of the module',
-                      3: 'Plant identification',
-                      4: 'Copyright',
-                      5: 'Serial number of module',
-                      6: 'Reserved for operating system',
-                      7: 'Module type name',
-                      8: 'Serial number of memory card',
-                      9: 'Manufacturer and profile of a CPU module',
-                      10:'OEM ID of a module',
-                      11:'Location designation of a module'
-                  },
-                  'packer': {
-                      (1, 2, 5): lambda(packet): "%s" % packet[:24],
-                      (3, 7, 8): lambda(packet): "%s" % packet[:32],
-                      (4,): lambda(packet): "%s" % packet[:26]
-                  }
-                }
+        0x11: {
+            'title': 'Module Identification',
+            'indexes': {
+                1: 'Module',
+                6: 'Basic Hardware',
+                7: 'Basic Firmware'
+            },
+            'packer': {
+                (1, 6): lambda packet: "{} v.{}.{}".format(packet[:20].decode('utf-8').rstrip('\x00'), packet[22], packet[23]),
+                (7,): lambda packet: "{} v.{}.{}.{}".format(packet[:20].decode('utf-8').rstrip('\x00'), packet[23], packet[24], packet[25])
+            }
+        },
+        0x1c: {
+            'title': 'Component Identification',
+            'indexes': {
+                1: 'Name of the PLC',
+                2: 'Name of the module',
+                3: 'Plant identification',
+                4: 'Copyright',
+                5: 'Serial number of module',
+                6: 'Reserved for operating system',
+                7: 'Module type name',
+                8: 'Serial number of memory card',
+                9: 'Manufacturer and profile of a CPU module',
+                10: 'OEM ID of a module',
+                11: 'Location designation of a module'
+            },
+            'packer': {
+                (1, 2, 5): lambda packet: packet[:24].decode('utf-8').rstrip('\x00'),
+                (3, 7, 8): lambda packet: packet[:32].decode('utf-8').rstrip('\x00'),
+                (4,): lambda packet: packet[:26].decode('utf-8').rstrip('\x00')
+            }
+        }
     }
+
+
 
     con = s7(ip, port, src_tsap, dst_tsap)
     con.Connect()
@@ -320,47 +322,47 @@ def GetIdentity(ip, port, src_tsap, dst_tsap):
         indexes = szl_dict[szl_id]['indexes']
         packers = szl_dict[szl_id]['packer']
         for item in entities:
-            if len(item)>2:
+            if len(item) > 2:
                 n, = unpack('!H', item[:2])
                 item = item[2:]
-                title = indexes[n] if indexes.has_key(n) else "Unknown (%d)" % n
+                title = indexes[n] if n in indexes else f"Unknown ({n})"
 
                 try:
-                    packers_keys = [ i for i in packers.keys() if n in i ]
-                    formated_item = packers[packers_keys[0]](item).strip('\x00')
-                except (struct.error, IndexError) :
-                    formated_item = StripUnprintable(item).strip('\x00')
+                    packers_keys = [i for i in packers.keys() if n in i]
+                    formated_item = packers[packers_keys[0]](item).strip(b'\x00').decode('utf-8')
+                except (struct.error, IndexError):
+                    formated_item = StripUnprintable(item).strip(b'\x00').decode('utf-8')
 
-                res.append("%s: %s\t(%s)" % (title.ljust(25), formated_item.ljust(30), item.encode('hex')))
+                res.append(f"{title.ljust(25)}: {formated_item.ljust(30)}\t({item.hex()})")
 
     return res
 
 def Scan(ip, port, options):
-    src_tsaps = [ int(n.strip(), 0) for n in options.src_tsap.split(',') ] if options.src_tsap else [0x100, 0x200]
-    dst_tsaps = [ int(n.strip(), 0) for n in options.dst_tsap.split(',') ] if options.dst_tsap else [0x102, 0x200, 0x201]
+    src_tsaps = [int(n.strip(), 0) for n in options.src_tsap.split(',')] if options.src_tsap else [0x100, 0x200]
+    dst_tsaps = [int(n.strip(), 0) for n in options.dst_tsap.split(',')] if options.dst_tsap else [0x102, 0x200, 0x201]
 
     res = ()
     try:
         res = BruteTsap(ip, port, src_tsaps, dst_tsaps)
     except socket.error as e:
-        print "%s:%d %s" % (ip, port, e)
+        print(f"{ip}:{port} {e}")
 
     if not res:
         return False
 
-    print "%s:%d S7comm (src_tsap=0x%x, dst_tsap=0x%x)" % (ip, port, res[0], res[1])
+    print(f"{ip}:{port} S7comm (src_tsap=0x{res[0]:x}, dst_tsap=0x{res[1]:x})")
 
-    # sometimes unexpected exceptions occures, so try to get identity several time
+    # sometimes unexpected exceptions occur, so try to get identity several times
     identities = []
     for attempt in [0, 1]:
         try:
             identities = GetIdentity(ip, port, res[0], res[1])
             break
         except (S7ProtocolError, socket.error) as e:
-            print "  %s" % e
+            print(f"  {e}")
 
     for line in identities:
-        print "  %s" % line
+        print(f"  {line}")
 
     return True
 

@@ -8,47 +8,53 @@ Copyright (c) 2012 Dmitry Efanov (Positive Research)
 
 __author__ = 'defanov'
 
-from struct import pack,unpack
+from struct import pack, unpack
 import socket
 
 from optparse import OptionGroup
-
 import string
 
-__FILTER = "".join([' '] + [' ' if chr(x) not in string.printable or chr(x) in string.whitespace else chr(x) for x in range(1,256)])
+__FILTER = "".join([' '] + [' ' if chr(x) not in string.printable or chr(x) in string.whitespace else chr(x) for x in range(1, 256)])
+
+
 def StripUnprintable(msg):
     return msg.translate(__FILTER)
+
 
 class ModbusProtocolError(Exception):
     def __init__(self, message, packet=''):
         self.message = message
         self.packet = packet
+
     def __str__(self):
         return "[Error][ModbusProtocol] %s" % self.message
 
+
 class ModbusError(Exception):
     _errors = {
-        0:      'No reply',
+        0: 'No reply',
         # Modbus errors
-        1:      'ILLEGAL FUNCTION',
-        2:      'ILLEGAL DATA ADDRESS',
-        3:      'ILLEGAL DATA VALUE',
-        4:      'SLAVE DEVICE FAILURE',
-        5:      'ACKNOWLEDGE',
-        6:      'SLAVE DEVICE BUSY',
-        8:      'MEMORY PARITY ERROR',
-        0x0A:   'GATEWAY PATH UNAVAILABLE',
-        0x0B:   'GATEWAY TARGET DEVICE FAILED TO RESPOND'
+        1: 'ILLEGAL FUNCTION',
+        2: 'ILLEGAL DATA ADDRESS',
+        3: 'ILLEGAL DATA VALUE',
+        4: 'SLAVE DEVICE FAILURE',
+        5: 'ACKNOWLEDGE',
+        6: 'SLAVE DEVICE BUSY',
+        8: 'MEMORY PARITY ERROR',
+        0x0A: 'GATEWAY PATH UNAVAILABLE',
+        0x0B: 'GATEWAY TARGET DEVICE FAILED TO RESPOND'
     }
-    def __init__(self,  code):
+
+    def __init__(self, code):
         self.code = code
-        self.message = ModbusError._errors[code] if ModbusError._errors.has_key(code) else 'Unknown Error'
+        self.message = ModbusError._errors.get(code, 'Unknown Error')
+
     def __str__(self):
         return "[Error][Modbus][%d] %s" % (self.code, self.message)
 
 
 class ModbusPacket:
-    def __init__(self, transactionId=0, unitId=0, functionId=0, data=''):
+    def __init__(self, transactionId=0, unitId=0, functionId=0, data=b''):
         self.transactionId = transactionId
         self.unitId = unitId
         self.functionId = functionId
@@ -56,24 +62,25 @@ class ModbusPacket:
 
     def pack(self):
         return pack('!HHHBB',
-            self.transactionId,          # transaction id
-            0,                           # protocol identifier (reserved 0)
-            len(self.data)+2,            # remaining length
-            self.unitId,                 # unit id
-            self.functionId              # function id
-        ) + self.data                    # data
+                    self.transactionId,
+                    0,
+                    len(self.data) + 2,
+                    self.unitId,
+                    self.functionId
+                    ) + self.data
 
-    def unpack(self,packet):
-        if len(packet)<8:
+    def unpack(self, packet):
+        if len(packet) < 8:
             raise ModbusProtocolError('Response too short', packet)
 
-        self.transactionId, self.protocolId, length, self.unitId, self.functionId = unpack('!HHHBB',packet[:8])
-        if len(packet) < 6+length:
+        self.transactionId, self.protocolId, length, self.unitId, self.functionId = unpack('!HHHBB', packet[:8])
+        if len(packet) < 6 + length:
             raise ModbusProtocolError('Response too short', packet)
 
         self.data = packet[8:]
 
         return self
+
 
 class Modbus:
     def __init__(self, ip, port=502, uid=0, timeout=8):
@@ -82,11 +89,11 @@ class Modbus:
         self.uid = uid
         self.timeout = timeout
 
-    def Request(self, functionId, data=''):
+    def Request(self, functionId, data=b''):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
 
-        sock.connect((self.ip,self.port))
+        sock.connect((self.ip, self.port))
 
         sock.send(ModbusPacket(0, self.uid, functionId, data).pack())
 
@@ -101,45 +108,45 @@ class Modbus:
             raise ModbusProtocolError('Unexpected unit ID or incorrect packet', reply)
 
         if response.functionId != functionId:
-            raise ModbusError(ord(response.data[0]))
+            raise ModbusError(response.data[0])
 
         return response.data
 
     def DeviceInfo(self):
-        res = self.Request(0x2b, '\x0e\x01\00')
+        res = self.Request(0x2b, b'\x0e\x01\00')
 
-        if res and len(res)>5:
-            objectsCount = ord(res[5])
+        if res and len(res) > 5:
+            objectsCount = res[5]
             data = res[6:]
             info = ''
             for i in range(0, objectsCount):
-                info += data[2:2+ord(data[1])]
+                info += data[2:2 + data[1]].decode()
                 info += ' '
-                data = data[2+ord(data[1]):]
+                data = data[2 + data[1]:]
             return info
         else:
             raise ModbusProtocolError('Packet format (reply for device info) wrong', res)
 
-def ScanUnit(ip, port, uid, timeout, function=None, data=''):
+def ScanUnit(ip, port, uid, timeout, function=None, data=b''):
     con = Modbus(ip, port, uid, timeout)
 
     unitInfo = []
     if function:
         try:
             response = con.Request(function, data)
-            unitInfo.append("Response: %s\t(%s)" % (StripUnprintable(response), response.encode('hex')))
+            unitInfo.append(f"Response: {StripUnprintable(response.decode())}\t({response.hex()})")
         except ModbusError as e:
             if e.code:
-                unitInfo.append("Response error: %s" % e.message)
+                unitInfo.append(f"Response error: {e.message}")
             else:
                 return unitInfo
 
     try:
         deviceInfo = con.DeviceInfo()
-        unitInfo.append("Device: %s" % deviceInfo)
+        unitInfo.append(f"Device: {deviceInfo}")
     except ModbusError as e:
         if e.code:
-            unitInfo.append("Device info error: %s" % e.message)
+            unitInfo.append(f"Device info error: {e.message}")
         else:
             return unitInfo
 
@@ -148,33 +155,33 @@ def ScanUnit(ip, port, uid, timeout, function=None, data=''):
 def Scan(ip, port, options):
     res = False
     try:
-        data = options.modbus_data.decode('string-escape') if options.modbus_data else ''
+        data = bytes(options.modbus_data, 'utf-8') if options.modbus_data else b''
 
         if options.brute_uid:
-            uids = [0,255] + range(1,255)
+            uids = [0, 255] + list(range(1, 255))
         elif options.modbus_uid:
             uids = [int(uid.strip()) for uid in options.modbus_uid.split(',')]
         else:
-            uids = [0,255]
+            uids = [0, 255]
 
         for uid in uids:
             unitInfo = ScanUnit(ip, port, uid, options.modbus_timeout, options.modbus_function, data)
 
             if unitInfo:
                 if not res:
-                    print "%s:%d Modbus/TCP" % (ip, port)
+                    print(f"{ip}:{port} Modbus/TCP")
                     res = True
-                print "  Unit ID: %d" % uid
+                print(f"  Unit ID: {uid}")
                 for line in unitInfo:
-                    print "    %s" % line
+                    print(f"    {line}")
 
         return res
 
     except ModbusProtocolError as e:
-        print "%s:%d Modbus protocol error: %s (packet: %s)" % (ip, port, e.message, e.packet.encode('hex'))
+        print(f"{ip}:{port} Modbus protocol error: {e.message} (packet: {e.packet.hex()})")
         return res
     except socket.error as e:
-        print "%s:%d %s" % (ip, port, e)
+        print(f"{ip}:{port} {e}")
         return res
 
 def AddOptions(parser):
